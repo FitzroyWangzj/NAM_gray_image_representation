@@ -1,8 +1,8 @@
 import cv2
 import numpy as np
 import time
+import math
 import pandas as pd
-
 
 #位平面分解
 def BPD(img, r, c):
@@ -230,11 +230,37 @@ def searchMatrix(img, r, c, x1, y1, epsilon):#,num):
 #             sm = s
 #     return [xm, ym]
 
+#数字转二进制字符串
+def num2str(num):
+    num = str(bin(num))[2:]
+    while len(num)<8:
+        num = '0' + num
+    return num
+
+# k code
+def k_coding(g1, g4 = None,g2 = None,g3 = None):
+    code = ""
+    if g4 is None:
+        return num2str(g1)
+    if g2 is None:
+        g1 = num2str(g1)
+        g4 = num2str(g4)
+        for i in range(8):
+            code += g1[i] + g4[i]
+        return code
+    g1 = num2str(g1)
+    g2 = num2str(g2)
+    g3 = num2str(g3)
+    g4 = num2str(g4)
+    for i in range(8):
+        code += g1[i] + g2[i] + g3[i] + g4[i]
+    return code
 
 # 将矩阵子模式信息存入颜色表P及矩阵R中
-def record(P, vis,  R, img, x1, y1, x2, y2, num):
+def record(P, R, M, vis, img, x1, y1, x2, y2, num):
     if x1 < x2 and y1 < y2:
-        P[num] = [img[x1, y1], img[x2, y1], img[x1, y2], img[x2, y2]]
+        P[num] = k_coding(img[x1, y1], img[x2, y1], img[x1, y2], img[x2, y2])
+        M[num] = [x1, y1, x2, y2]
         R[x1, y1] = 1
         R[x2, y2] = 2
         for i in range(x1, x2+1):
@@ -242,7 +268,8 @@ def record(P, vis,  R, img, x1, y1, x2, y2, num):
                 vis[i, j] = 1
 
     elif (x1 == x2 and y1 != y2) or (x1 != x2 and y1 == y2):
-        P[num] = [img[x1, y1], img[x2, y2]]
+        P[num] = k_coding(img[x1, y1], img[x2, y2])
+        M[num] = [x1, y1, x2, y2]
         R[x1, y1] = 1
         R[x2, y2] = 2
         for i in range(x1, x2+1):
@@ -250,19 +277,19 @@ def record(P, vis,  R, img, x1, y1, x2, y2, num):
                 vis[i, j] = 1
 
     elif x1 == x2 and y1 == y2:
-        P[num] = [img[x1, y1]]
+        P[num] = k_coding(img[x1, y1])
+        M[num] = [x1, y1]
         R[x1, y1] = -1
         vis[x1, y1] = 1
     return
 
-
-def encryption(P, Q, R, vis, img, num, r, c, epsilon):
+def encryption(P, R, M, vis, img, num, r, c, epsilon):
     x1 = 0
     y1 = 0
     while x1 < c and y1 < r:
-        [x2, y2] = searchMatrix(img, r, c, x1, y1, epsilon) #  ,num)
+        [x2, y2] = searchMatrix(img, r, c, x1, y1, epsilon)
         num += 1
-        record(P, vis, R, img, x1, y1, x2, y2, num)
+        record(P, R, M, vis, img, x1, y1, x2, y2, num)
         x1 = x2+1
         # 若溢出，则换行扫描
         if x1 >= c:
@@ -277,6 +304,157 @@ def encryption(P, Q, R, vis, img, num, r, c, epsilon):
                     return num
     return num
 
+#  计算表示坐标所需位数
+def cal_n(num):
+    if num == 1:
+        return 1
+    if num == 2:
+        return 2
+    n = math.log(num,2)
+    if n == int(math.log(num, 2)):
+        return n
+    return math.ceil(math.log(num,2))
+
+#  坐标数据压缩
+def site_compression(R, r, c ) -> str:
+    code = {1: '11', 2: "101", -1: "100"}
+    Q = ""
+    for j in range(r):
+        x = 0   # last x site
+        for i in range(c):
+            if R[i, j]:
+                Q += code[R[i, j]]
+
+                # site coding
+                b = ""
+                dist = i - x
+                n = cal_n(c-x)  # number of bits for represent the site
+                while dist:
+                    b = str(dist%2) + b
+                    dist //= 2
+                while len(b) < n:
+                    b = '0' + b
+                x = i
+                Q += b
+            #  判断最后一位数处理一行全零以及最后一个非零数后全为零的两种情况
+            if i == c - 1 and not R[i, j]:
+                Q += '0'
+    return Q
+
+#  根据坐标表还原R矩阵
+def Q2R(Q, r, c):
+    R = np.zeros((c,r),dtype = int)
+    x = 0
+    y = 0
+    i = 0
+    while i <= len(Q) - 1:
+        if Q[i] == '1':
+            i += 1
+            if Q[i] == '1':
+                num = 1
+            else:
+                i += 1
+                if Q[i] == '1':
+                    num = 2
+                else:
+                    num = -1
+
+
+            #  获取dist
+            dist = 0
+            n = cal_n(c-x)
+            for j in range(int(n)):
+                dist *= 2
+                i += 1
+                if Q[i] == '1':
+                    dist += 1
+            #  更新坐标
+            x += dist
+            if x > c-1:
+                x = dist
+                y += 1
+            if y > r-1:
+                return R
+
+            R[x, y] = num
+            #  更新坐标位数
+            i += 1
+            if x >= c-1:
+                x = 0
+                y += 1
+        else:
+            #  遇到行尾或整行为零则换行
+            y += 1
+            i += 1
+            x = 0
+    return R
+
+# k码转十进制数
+def k2num(code):
+    l = len(code)
+    n = int(l / 8)
+    g = []
+    for i in range(n):
+        pos = i # 字符位置
+        c = ""
+        while pos < l:
+            c += code[pos]
+            pos += n
+        c = int(c, 2)
+        g.append(c)
+    return g
+
+# 解码
+def descryption(G, P, Q, M, r, c):
+    R = Q2R(Q, r, c)
+    total_num = max(P.keys())
+    num = 0
+    x0 = 0
+    y0 = 0
+    while num < total_num:
+        num += 1
+        g = k2num(P[num])
+        print(g)
+        while R[x0, y0] == 0 or R[x0, y0] == 2:
+            x0 += 1
+            if x0 > c-1:
+                y0 += 1
+                x0 = 0
+        if R[x0, y0] == -1:
+            G[x0, y0] = g[0]
+        else:
+            x1, y1, x2, y2 = M[num]
+            if x1 != x2 and y1 != y2:
+                G[x1, y1] = g[0]
+                G[x2, y1] = g[1]
+                G[x1, y2] = g[2]
+                G[x2, y2] = g[3]
+
+                for x in range(x1, x2 + 1):
+                    for y in range(y1, y2 + 1):
+                        G[x, y] = caculateGest(g[0], g[1], g[2], g[3], x, y, x1, y1, x2, y2)
+            elif x1 == x2:
+                G[x1, y1] = g[0]
+                G[x1, y2] = g[1]
+                for y in range(y1, y2 + 1):
+                    i1 = (y - y1) / (y2 - y1)
+                    G[x1, y] = g[0] + (g[1] - g[0]) * i1
+            else:
+                G[x1, y1] = g[0]
+                G[x2, y1] = g[1]
+                for x in range(x1, x2 + 1):
+                    i2 = (x - x1) / (x2 - x1)
+                    G[x, y1] = g[0] + (g[1] - g[0]) * i2
+        x0 += 1
+        if x0 > c - 1:
+            y0 += 1
+            x0 = 0
+
+
+    return
+
+
+#  main
 start_time = time.time()
 # 设定参数
 epsilon = 10
@@ -284,17 +462,27 @@ epsilon = 10
 img = cv2.imread("D:/desktop/SRP/Test/197.bmp", 0)
 [r, c] = img.shape
 img = img.T  # 转置矩阵使得第一个下标为横坐标，第二个下标为纵坐标
+cv2.imshow('origin',img)
 
 P = {}  # 颜色表
-Q = []  # 坐标表
 R = np.zeros((c, r), dtype=int)  # 用于编码的坐标矩阵
 vis = np.zeros((c, r), dtype=bool)  #  记录是否已被编码
+M = {}    #  记录矩形子模式
 num = 0
 # 加密
-num = encryption(P, Q, R, vis, img, num, r, c, epsilon)
-R = R.T
-print(R)
+num = encryption(P, R, M, vis, img, num, r, c, epsilon)
+Q = site_compression(R, r, c)
+# R = R.T
+print(R.T)
 print(P)
+print(Q)
+#  解码
+G = np.zeros((c,r),dtype = np.uint8)
+# R = Q2R(Q, r, c)
+# print(R.T)
+descryption(G, P, Q, M, r, c)
+print(G.T)
+cv2.imshow('new',G)
 cv2.waitKey()
 cv2.destroyAllWindows()
 end_time = time.time()
